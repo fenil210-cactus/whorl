@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var wheelOn = Prefs.wheelEnabled
     @State private var keys: [WheelMode: ModifierKey] = Dictionary(uniqueKeysWithValues: WheelMode.allCases.map { ($0, Prefs.key(for: $0)) })
     @State private var login = SMAppService.mainApp.status == .enabled
+    @State private var dock = Prefs.showInDock
     @State private var loginError: String?
     @State private var engines = Engines.current
     private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -42,6 +43,10 @@ struct SettingsView: View {
             Section("General") {
                 Toggle("Open Whorl at login", isOn: $login)
                     .onChange(of: login) { setLogin($0) }
+                Toggle("Show Whorl in the Dock", isOn: $dock)
+                    .onChange(of: dock) { Prefs.showInDock = $0 }
+                Text("Turn this on if you can't see Whorl in a crowded menu bar. Clicking the Dock icon opens the window.")
+                    .font(.caption).foregroundStyle(.secondary)
                 if let loginError { Text(loginError).font(.caption).foregroundStyle(.orange) }
             }
             Section("Extra tools") {

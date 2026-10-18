@@ -14,11 +14,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildStatusItem()
+        applyDockPolicy()
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
         monitor.start()
         NotificationCenter.default.addObserver(forName: Prefs.changed, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.monitor.start() }
+            MainActor.assumeIsolated {
+                self?.monitor.start()
+                self?.applyDockPolicy()
+            }
         }
         // Accessibility can be granted while Whorl is running; restart the monitor when that happens.
         trustTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -32,6 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Prefs.seenWelcome = true
             showWindow()
         }
+    }
+
+    private func applyDockPolicy() {
+        let policy: NSApplication.ActivationPolicy = Prefs.showInDock ? .regular : .accessory
+        if NSApp.activationPolicy() != policy { NSApp.setActivationPolicy(policy) }
     }
 
     // MARK: Opening files (Finder → Open With, drop on the app icon, Services menu)

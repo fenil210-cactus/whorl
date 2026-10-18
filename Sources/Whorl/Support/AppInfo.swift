@@ -3,7 +3,7 @@ import ApplicationServices
 import WhorlCore
 
 enum AppInfo {
-    static let version = "0.2.0"
+    static let version = "0.2.1"
     static let repository = URL(string: "https://github.com/fenil210-cactus/whorl")!
     static let accent = NSColor(calibratedRed: 0.36, green: 0.42, blue: 1.0, alpha: 1)
 }
@@ -80,6 +80,12 @@ enum Prefs {
     static var wheelEnabled: Bool {
         get { defaults.object(forKey: "wheelEnabled") as? Bool ?? true }
         set { defaults.set(newValue, forKey: "wheelEnabled"); NotificationCenter.default.post(name: changed, object: nil) }
+    }
+
+    /// A full menu bar (especially next to the notch) can hide Whorl's icon, so the Dock is the fallback.
+    static var showInDock: Bool {
+        get { defaults.bool(forKey: "showInDock") }
+        set { defaults.set(newValue, forKey: "showInDock"); NotificationCenter.default.post(name: changed, object: nil) }
     }
 
     static var seenWelcome: Bool {

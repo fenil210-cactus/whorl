@@ -1,6 +1,6 @@
 cask "whorl" do
-  version "0.2.0"
-  sha256 "0e4188ea69052a6198964ecdd0adfaf63dc39e0c805349a7da7ff17493b5fdca"
+  version "0.2.1"
+  sha256 "dfa924c4eb9e6dbc700738e784784900d5084b999e63a4dc3b6af3af67f7ec48"
 
   url "https://github.com/fenil210-cactus/whorl/releases/download/v#{version}/Whorl.zip"
   name "Whorl"

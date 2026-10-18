@@ -41,8 +41,6 @@ struct HomeView: View {
     var openSettings: () -> Void = {}
     var chooseFiles: () -> Void = {}
     @State private var targeted = false
-    @State private var trusted = Permissions.accessibilityGranted
-    private let tick = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,7 +50,7 @@ struct HomeView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     if model.files.isEmpty {
                         DropZone(targeted: targeted, choose: chooseFiles)
-                        WheelCard(trusted: trusted)
+                        WheelCard()
                         Capabilities(engines: model.engines)
                     } else {
                         FileList(model: model)
@@ -83,7 +81,6 @@ struct HomeView: View {
             Self.load(providers) { model.add($0) }
             return true
         }
-        .onReceive(tick) { _ in trusted = Permissions.accessibilityGranted }
     }
 
     private var header: some View {
@@ -154,26 +151,14 @@ struct DropZone: View {
 }
 
 struct WheelCard: View {
-    var trusted: Bool
-
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: trusted ? "checkmark.circle.fill" : "circle.dashed")
-                .font(.system(size: 24)).foregroundStyle(trusted ? Color.green : Color.whorl)
+            Image(systemName: "circle.hexagongrid.fill")
+                .font(.system(size: 24)).foregroundStyle(Color.whorl)
             VStack(alignment: .leading, spacing: 6) {
-                Text(trusted ? "The wheel is on" : "Optional: use the wheel from anywhere").font(.system(size: 14, weight: .semibold))
-                if trusted {
-                    Text("Start dragging a file in Finder, then tap \(keys). Drop it on a wedge. The result lands next to the original.")
-                        .font(.system(size: 12.5)).foregroundStyle(.secondary)
-                } else {
-                    Text("Whorl can open a wheel while you drag a file in Finder. macOS needs your OK for Whorl to notice the key tap. The window above works without it.")
-                        .font(.system(size: 12.5)).foregroundStyle(.secondary)
-                    HStack {
-                        Button("Turn on…") { Permissions.requestAccessibility() }.buttonStyle(.borderedProminent).tint(.whorl).controlSize(.small)
-                        Button("Open Settings") { Permissions.openAccessibilitySettings() }.controlSize(.small)
-                    }
-                    Text("After you switch Whorl on there, this card updates by itself.").font(.system(size: 11.5)).foregroundStyle(.tertiary)
-                }
+                Text("The wheel").font(.system(size: 14, weight: .semibold))
+                Text("Start dragging a file in Finder, then tap \(keys) while you hold it. A wheel opens under your pointer. Drop the file on a wedge and the result lands next to the original. Drop anywhere else to cancel.")
+                    .font(.system(size: 12.5)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }

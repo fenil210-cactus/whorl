@@ -1,26 +1,10 @@
 import AppKit
-import ApplicationServices
 import WhorlCore
 
 enum AppInfo {
-    static let version = "0.2.1"
+    static let version = "0.3.0"
     static let repository = URL(string: "https://github.com/fenil210-cactus/whorl")!
     static let accent = NSColor(calibratedRed: 0.36, green: 0.42, blue: 1.0, alpha: 1)
-}
-
-enum Permissions {
-    static var accessibilityGranted: Bool { AXIsProcessTrusted() }
-
-    static func requestAccessibility() {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-    }
-
-    static func openAccessibilitySettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
-    }
 }
 
 /// The three modifier keys that open the wheel while a file is being dragged.

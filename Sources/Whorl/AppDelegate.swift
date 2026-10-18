@@ -9,8 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let model = ConvertModel()
     private var window: NSWindow?
     private var settingsWindow: NSWindow?
-    private var wasTrusted = Permissions.accessibilityGranted
-    private var trustTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildStatusItem()
@@ -22,14 +20,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated {
                 self?.monitor.start()
                 self?.applyDockPolicy()
-            }
-        }
-        // Accessibility can be granted while Whorl is running; restart the monitor when that happens.
-        trustTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let now = Permissions.accessibilityGranted
-                if now != self.wasTrusted { self.wasTrusted = now; self.monitor.start() }
             }
         }
         if !Prefs.seenWelcome {
@@ -81,11 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let keys = WheelMode.allCases.map { "\(Prefs.key(for: $0).symbol) \($0.title)" }.joined(separator: "   ")
         if !Prefs.wheelEnabled {
             menu.addItem(disabled("Wheel is off"))
-        } else if Permissions.accessibilityGranted {
+        } else {
             menu.addItem(disabled("Drag a file, then tap:"))
             menu.addItem(disabled("   \(keys)"))
-        } else {
-            menu.addItem(item("Turn on the wheel…", #selector(enableWheel), ""))
         }
         menu.addItem(.separator())
         menu.addItem(item("Settings…", #selector(openSettings), ","))
@@ -110,11 +98,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openSettings() { showSettings() }
     @objc private func openGitHub() { NSWorkspace.shared.open(AppInfo.repository) }
     @objc private func quit() { NSApp.terminate(nil) }
-
-    @objc private func enableWheel() {
-        Permissions.requestAccessibility()
-        showWindow()
-    }
 
     @objc private func chooseFiles() {
         NSApp.activate(ignoringOtherApps: true)

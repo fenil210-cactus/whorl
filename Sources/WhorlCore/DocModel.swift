@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// A small, format-neutral document: headings, paragraphs, lists, quotes, code.
@@ -10,8 +11,50 @@ struct Run: Equatable {
     var link: String?
 }
 
+struct TableData: Equatable {
+    var rows: [[String]]
+    /// The first row is a header (bold, shaded).
+    var header = true
+    var columns: Int { rows.map(\.count).max() ?? 0 }
+}
+
+struct ImageData: Equatable {
+    var data: Data
+    /// Natural size in points, used to size the picture on the page.
+    var width: Double
+    var height: Double
+    /// "png" or "jpg".
+    var ext = "png"
+    var alt = ""
+    var mime: String { ext == "jpg" ? "image/jpeg" : "image/png" }
+}
+
+/// Turns an `src` (embedded data, or a file beside the document) into a picture; the web is never touched.
+enum ImageSource {
+    static func load(_ src: String, base: URL?, width: Double? = nil, alt: String = "") -> ImageData? {
+        var data: Data?
+        if src.hasPrefix("data:") {
+            if let comma = src.firstIndex(of: ",") { data = Data(base64Encoded: String(src[src.index(after: comma)...]), options: .ignoreUnknownCharacters) }
+        } else if !src.contains("://"), let base {
+            let path = src.removingPercentEncoding ?? src
+            data = try? Data(contentsOf: path.hasPrefix("/") ? URL(fileURLWithPath: path) : base.appendingPathComponent(path))
+        }
+        guard let data, let image = NSImage(data: data), image.size.width > 0 else { return nil }
+        let isPNG = data.starts(with: [0x89, 0x50, 0x4E, 0x47]), isJPEG = data.starts(with: [0xFF, 0xD8])
+        var bytes = data
+        if !isPNG && !isJPEG {
+            guard let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return nil }
+            bytes = png
+        }
+        let w = width ?? Double(image.size.width)
+        return ImageData(data: bytes, width: w, height: w * Double(image.size.height) / Double(image.size.width), ext: isJPEG ? "jpg" : "png", alt: alt)
+    }
+}
+
 enum BlockKind: Equatable {
     case paragraph, heading(Int), bullet, number(Int), quote, code
+    case table(TableData)
+    case image(ImageData)
 }
 
 struct Block: Equatable {
@@ -28,7 +71,7 @@ struct Doc {
 // MARK: - Markdown in
 
 enum MarkdownParser {
-    static func parse(_ source: String) -> Doc {
+    static func parse(_ source: String, base: URL? = nil) -> Doc {
         var blocks: [Block] = []
         var paragraph: [String] = []
         var code: [String] = []
@@ -41,8 +84,24 @@ enum MarkdownParser {
         }
 
         let text = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
-        for line in text.components(separatedBy: "\n") {
+        let lines = text.components(separatedBy: "\n")
+        var lineIndex = 0
+        while lineIndex < lines.count {
+            let line = lines[lineIndex]
+            lineIndex += 1
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if !inCode, trimmed.contains("|"), lineIndex < lines.count, isTableRule(lines[lineIndex]) {
+                flush()
+                var rows = [cells(trimmed)]
+                lineIndex += 1
+                while lineIndex < lines.count, lines[lineIndex].contains("|"),
+                      !lines[lineIndex].trimmingCharacters(in: .whitespaces).isEmpty {
+                    rows.append(cells(lines[lineIndex]))
+                    lineIndex += 1
+                }
+                blocks.append(Block(kind: .table(TableData(rows: rows)), runs: []))
+                continue
+            }
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 if inCode {
                     blocks.append(Block(kind: .code, runs: [Run(text: code.joined(separator: "\n"), code: true)]))
@@ -56,6 +115,12 @@ enum MarkdownParser {
             if inCode { code.append(line); continue }
             if trimmed.isEmpty { flush(); continue }
             if let heading = heading(trimmed) { flush(); blocks.append(heading); continue }
+            if let alt = HTMLParser.firstMatch("^!\\[([^\\]]*)\\]\\(([^)]*)\\)$", in: trimmed, group: 1), let src = HTMLParser.firstMatch("^!\\[([^\\]]*)\\]\\(([^)]*)\\)$", in: trimmed, group: 2) {
+                flush()
+                let link = src.split(separator: " ", maxSplits: 1).first.map(String.init) ?? src
+                if let image = ImageSource.load(link, base: base, alt: alt) { blocks.append(Block(kind: .image(image), runs: [])) }
+                continue
+            }
             if isRule(trimmed) { flush(); continue }
             if let item = bullet(trimmed) { flush(); blocks.append(item); continue }
             if let item = numbered(trimmed) { flush(); blocks.append(item); continue }
@@ -70,6 +135,19 @@ enum MarkdownParser {
         flush()
         if inCode, !code.isEmpty { blocks.append(Block(kind: .code, runs: [Run(text: code.joined(separator: "\n"), code: true)])) }
         return Doc(title: firstHeading(blocks), blocks: blocks)
+    }
+
+    private static func isTableRule(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.contains("-"), t.contains("|") else { return false }
+        return t.allSatisfy { "|-: ".contains($0) }
+    }
+
+    private static func cells(_ line: String) -> [String] {
+        var t = line.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("|") { t.removeFirst() }
+        if t.hasSuffix("|") { t.removeLast() }
+        return t.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     static func firstHeading(_ blocks: [Block]) -> String {
@@ -170,11 +248,11 @@ enum MarkdownParser {
 // MARK: - HTML in
 
 enum HTMLParser {
-    static func parse(_ html: String) -> Doc {
+    static func parse(_ html: String, base: URL? = nil) -> Doc {
         var source = html
         let title = firstMatch("<title[^>]*>(.*?)</title>", in: source).map { decode($0).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
         for pattern in ["<!--.*?-->", "<script.*?</script>", "<style.*?</style>", "<head.*?</head>"] {
-            source = source.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
+            source = source.replacingOccurrences(of: "(?s)" + pattern, with: "", options: [.regularExpression, .caseInsensitive])
         }
         var blocks: [Block] = []
         var runs: [Run] = []
@@ -182,6 +260,10 @@ enum HTMLParser {
         var bold = 0, italic = 0, pre = 0
         var link: String?
         var lists: [(ordered: Bool, count: Int)] = []
+        var tableDepth = 0
+        var tableRows: [[String]] = []
+        var tableRow: [String] = []
+        var tableHasHeader = false
 
         func flush() {
             let text = runs.map(\.text).joined()
@@ -212,18 +294,43 @@ enum HTMLParser {
             let name = tag.drop(while: { $0 == "/" }).prefix(while: { $0.isLetter || $0.isNumber }).lowercased()
             switch name {
             case "h1", "h2", "h3", "h4", "h5", "h6":
-                flush()
+                if tableDepth == 0 { flush() }
                 if !closing { kind = .heading(Int(name.dropFirst()) ?? 1) }
-            case "p", "div", "section", "article", "tr", "table", "header", "footer", "figure", "caption":
-                flush()
+            case "table":
+                if closing {
+                    tableDepth = max(0, tableDepth - 1)
+                    if tableDepth == 0 {
+                        if !tableRow.isEmpty { tableRows.append(tableRow); tableRow = [] }
+                        if !tableRows.isEmpty { blocks.append(Block(kind: .table(TableData(rows: tableRows, header: tableHasHeader || tableRows.count > 1)), runs: [])) }
+                        tableRows = []
+                        tableHasHeader = false
+                    }
+                } else {
+                    if tableDepth == 0 { flush() }
+                    tableDepth += 1
+                }
+            case "tr":
+                if tableDepth == 1 {
+                    if !tableRow.isEmpty { tableRows.append(tableRow) }
+                    tableRow = []
+                } else if tableDepth == 0 { flush() }
+            case "img":
+                if let src = firstMatch("src\\s*=\\s*[\"']([^\"']*)[\"']", in: tag),
+                   let image = ImageSource.load(decode(src), base: base, width: Double(firstMatch("width\\s*=\\s*[\"']?(\\d+)", in: tag) ?? ""),
+                                                alt: decode(firstMatch("alt\\s*=\\s*[\"']([^\"']*)[\"']", in: tag) ?? "")) {
+                    flush()
+                    blocks.append(Block(kind: .image(image), runs: []))
+                }
+            case "p", "div", "section", "article", "header", "footer", "figure", "caption":
+                if tableDepth == 0 { flush() }
             case "br":
                 runs.append(Run(text: "\n", bold: bold > 0, italic: italic > 0))
             case "ul", "ol":
-                flush()
+                if tableDepth == 0 { flush() }
                 if closing { _ = lists.popLast() } else { lists.append((name == "ol", 0)) }
             case "li":
-                flush()
-                if !closing {
+                if tableDepth == 0 { flush() }
+                if !closing, tableDepth == 0 {
                     if var top = lists.popLast() {
                         top.count += 1
                         lists.append(top)
@@ -240,7 +347,14 @@ enum HTMLParser {
                 pre += closing ? -1 : 1
                 if !closing { kind = .code }
             case "td", "th":
-                if closing { runs.append(Run(text: "  ")) }
+                if tableDepth >= 1 {
+                    if closing {
+                        if tableDepth == 1 {
+                            tableRow.append(runs.map(\.text).joined().replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines))
+                            runs = []
+                        }
+                    } else if name == "th" { tableHasHeader = true }
+                }
             case "strong", "b":
                 bold = max(0, bold + (closing ? -1 : 1))
             case "em", "i":
@@ -287,10 +401,10 @@ enum HTMLParser {
         return out
     }
 
-    private static func firstMatch(_ pattern: String, in text: String) -> String? {
+    static func firstMatch(_ pattern: String, in text: String, group: Int = 1) -> String? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              match.numberOfRanges > 1, let range = Range(match.range(at: 1), in: text) else { return nil }
+              match.numberOfRanges > group, let range = Range(match.range(at: group), in: text) else { return nil }
         return String(text[range])
     }
 }
@@ -311,7 +425,9 @@ enum TextParser {
 // MARK: - Writers
 
 enum DocWriter {
-    static func markdown(_ doc: Doc) -> String {
+    /// `imagePath` returns where the n-th picture was saved (relative to the .md file); without it pictures are left out.
+    static func markdown(_ doc: Doc, imagePath: ((Int) -> String)? = nil) -> String {
+        var imageIndex = 0
         var out = ""
         var previous: BlockKind?
         /// Items of the same list sit on consecutive lines; a switch between bullets and numbers starts a new list.
@@ -325,6 +441,11 @@ enum DocWriter {
             let text = markdownInline(block.runs)
             let line: String
             switch block.kind {
+            case .table(let table): line = markdownTable(table)
+            case .image(let image):
+                imageIndex += 1
+                guard let imagePath else { continue }
+                line = "![\(image.alt)](\(imagePath(imageIndex)))"
             case .heading(let level): line = String(repeating: "#", count: level) + " " + text
             case .bullet: line = "- " + text
             case .number(let n): line = "\(n). " + text
@@ -337,6 +458,18 @@ enum DocWriter {
             previous = block.kind
         }
         return out + "\n"
+    }
+
+    private static func markdownTable(_ table: TableData) -> String {
+        let width = max(table.columns, 1)
+        func row(_ cells: [String]) -> String {
+            let padded = cells + Array(repeating: "", count: width - cells.count)
+            return "| " + padded.map { $0.replacingOccurrences(of: "|", with: "\\|").replacingOccurrences(of: "\n", with: " ") }.joined(separator: " | ") + " |"
+        }
+        var lines = [row(table.rows.first ?? [])]
+        lines.append("|" + String(repeating: " --- |", count: width))
+        for body in table.rows.dropFirst() { lines.append(row(body)) }
+        return lines.joined(separator: "\n")
     }
 
     private static func markdownInline(_ runs: [Run]) -> String {
@@ -360,6 +493,8 @@ enum DocWriter {
             case .bullet: out.append("• " + block.plain)
             case .number(let n): out.append("\(n). " + block.plain)
             case .quote: out.append("  " + block.plain)
+            case .table(let table): out.append(table.rows.map { $0.joined(separator: "\t") }.joined(separator: "\n"))
+            case .image: continue
             default: out.append(block.plain)
             }
         }
@@ -385,7 +520,9 @@ enum DocWriter {
     }
 
     /// Well-formed body markup, usable in HTML and XHTML.
-    static func htmlBody(_ doc: Doc) -> String {
+    /// `imageSource` returns the `src` for the n-th picture; the default embeds it, so the page stands alone.
+    static func htmlBody(_ doc: Doc, imageSource: ((Int, ImageData) -> String)? = nil) -> String {
+        var imageIndex = 0
         var out = ""
         var open: String?
         func close() { if let tag = open { out += "</\(tag)>\n"; open = nil } }
@@ -405,6 +542,19 @@ enum DocWriter {
                 close(); out += "<pre><code>\(escape(block.plain))</code></pre>\n"
             case .paragraph:
                 close(); out += "<p>\(htmlInline(block.runs))</p>\n"
+            case .table(let table):
+                close()
+                out += "<table>\n"
+                for (index, row) in table.rows.enumerated() {
+                    let tag = index == 0 && table.header ? "th" : "td"
+                    out += "<tr>" + row.map { "<\(tag)>\(escape($0))</\(tag)>" }.joined() + "</tr>\n"
+                }
+                out += "</table>\n"
+            case .image(let image):
+                close()
+                imageIndex += 1
+                let src = imageSource?(imageIndex, image) ?? "data:\(image.mime);base64,\(image.data.base64EncodedString())"
+                out += "<p><img src=\"\(src)\" alt=\"\(escape(image.alt))\" width=\"\(Int(image.width))\"/></p>\n"
             }
         }
         close()
@@ -415,6 +565,7 @@ enum DocWriter {
         let title = escape(doc.title)
         let style = "body{font:16px/1.6 -apple-system,Helvetica,Arial,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;color:#222}"
             + "pre{background:#f4f4f4;padding:.8rem;overflow:auto}code{font-family:Menlo,monospace}blockquote{margin-left:0;padding-left:1rem;border-left:3px solid #ccc;color:#555}"
+            + "table{border-collapse:collapse;margin:1rem 0}th,td{border:1px solid #bbb;padding:.35rem .7rem;text-align:left}th{background:#f1f3f7}img{max-width:100%;height:auto}"
         return "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\"/>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>\n<title>\(title)</title>\n<style>\(style)</style>\n</head>\n<body>\n\(htmlBody(doc))</body>\n</html>\n"
     }
 }

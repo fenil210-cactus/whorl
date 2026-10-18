@@ -27,22 +27,25 @@ extension Wedge {
 }
 
 enum WheelArt {
-    static func draw(wedges: [Wedge], highlighted: Int?, mode: WheelMode, caption: String, summary: (symbol: String, text: String), center: CGPoint) {
+    /// `glass` means the ring sits on a blurred NSVisualEffectView, so no opaque backdrop is drawn.
+    static func draw(wedges: [Wedge], highlighted: Int?, mode: WheelMode, caption: String, summary: (symbol: String, text: String), center: CGPoint, glass: Bool = false) {
         let inner = Wheel.innerRadius
         let outer = Wheel.outerRadius
         let accent = AppInfo.accent
 
-        // Soft backdrop so the ring reads on any wallpaper.
-        let backdrop = NSBezierPath(ovalIn: NSRect(x: center.x - outer - 10, y: center.y - outer - 10, width: (outer + 10) * 2, height: (outer + 10) * 2))
-        NSGraphicsContext.saveGraphicsState()
-        let shadow = NSShadow()
-        shadow.shadowBlurRadius = 24
-        shadow.shadowOffset = NSSize(width: 0, height: -6)
-        shadow.shadowColor = NSColor(white: 0, alpha: 0.35)
-        shadow.set()
-        NSColor(white: 0.08, alpha: 0.9).setFill()
-        backdrop.fill()
-        NSGraphicsContext.restoreGraphicsState()
+        if !glass {
+            // Soft backdrop so the ring reads on any wallpaper.
+            let backdrop = NSBezierPath(ovalIn: NSRect(x: center.x - outer - 10, y: center.y - outer - 10, width: (outer + 10) * 2, height: (outer + 10) * 2))
+            NSGraphicsContext.saveGraphicsState()
+            let shadow = NSShadow()
+            shadow.shadowBlurRadius = 24
+            shadow.shadowOffset = NSSize(width: 0, height: -6)
+            shadow.shadowColor = NSColor(white: 0, alpha: 0.35)
+            shadow.set()
+            NSColor(white: 0.08, alpha: 0.9).setFill()
+            backdrop.fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
 
         let count = max(wedges.count, 1)
         let gap: CGFloat = 1.6
@@ -57,10 +60,29 @@ enum WheelArt {
             path.lineJoinStyle = .round
             path.lineWidth = 4
             let isOn = index == highlighted
-            (isOn ? accent : NSColor(white: 1, alpha: 0.10)).setFill()
-            path.fill()
-            (isOn ? accent : NSColor(white: 1, alpha: 0.10)).setStroke()
-            path.stroke()
+            if isOn {
+                NSGraphicsContext.saveGraphicsState()
+                let glow = NSShadow()
+                glow.shadowBlurRadius = 14
+                glow.shadowColor = accent.withAlphaComponent(0.7)
+                glow.set()
+                accent.setFill()
+                path.fill()
+                NSGraphicsContext.restoreGraphicsState()
+                path.addClip()
+                NSGradient(starting: accent.blended(withFraction: 0.28, of: .white) ?? accent, ending: accent)?
+                    .draw(in: path.bounds, angle: -90)
+                NSGraphicsContext.current?.cgContext.resetClip()
+            } else {
+                if glass {
+                    NSColor(white: 0, alpha: 0.22).setFill()
+                    path.fill()
+                }
+                NSColor(white: 1, alpha: glass ? 0.075 : 0.10).setFill()
+                path.fill()
+                NSColor(white: 1, alpha: glass ? 0.075 : 0.10).setStroke()
+                path.stroke()
+            }
 
             let middle = (start + end) / 2
             let spot = point(center, (inner + outer) / 2, middle)
@@ -75,8 +97,17 @@ enum WheelArt {
 
         // Hub: what is being dragged.
         let hub = NSBezierPath(ovalIn: NSRect(x: center.x - inner + 8, y: center.y - inner + 8, width: (inner - 8) * 2, height: (inner - 8) * 2))
-        NSColor(white: 1, alpha: 0.08).setFill()
+        NSColor(white: glass ? 0 : 1, alpha: glass ? 0.30 : 0.08).setFill()
         hub.fill()
+        NSColor(white: 1, alpha: 0.16).setStroke()
+        hub.lineWidth = 1
+        hub.stroke()
+        if glass {
+            let rim = NSBezierPath(ovalIn: NSRect(x: center.x - outer, y: center.y - outer, width: outer * 2, height: outer * 2))
+            NSColor(white: 1, alpha: 0.16).setStroke()
+            rim.lineWidth = 1
+            rim.stroke()
+        }
         if let image = symbolImage(summary.symbol, size: 18, color: NSColor(white: 1, alpha: 0.9)) {
             image.draw(at: NSPoint(x: center.x - image.size.width / 2, y: center.y + 1), from: .zero, operation: .sourceOver, fraction: 1)
         }
@@ -92,7 +123,7 @@ enum WheelArt {
             let rect = NSRect(x: x, y: chipY, width: chipWidth, height: 22)
             let active = item == mode
             let pill = NSBezierPath(roundedRect: rect, xRadius: 11, yRadius: 11)
-            (active ? accent : NSColor(white: 0.08, alpha: 0.85)).setFill()
+            (active ? accent : NSColor(white: 0.06, alpha: glass ? 0.55 : 0.85)).setFill()
             pill.fill()
             drawText("\(Prefs.key(for: item).symbol)  \(item.title)", at: NSPoint(x: rect.midX, y: rect.midY - 0.5), size: 11, weight: active ? .semibold : .medium, color: NSColor(white: 1, alpha: active ? 1 : 0.7))
             x += chipWidth + 6
@@ -101,7 +132,7 @@ enum WheelArt {
         // Caption below.
         let captionRect = textSize(caption, size: 12, weight: .medium)
         let pillRect = NSRect(x: center.x - captionRect.width / 2 - 14, y: center.y - outer - 46, width: captionRect.width + 28, height: 26)
-        NSColor(white: 0.08, alpha: 0.88).setFill()
+        NSColor(white: 0.06, alpha: glass ? 0.6 : 0.88).setFill()
         NSBezierPath(roundedRect: pillRect, xRadius: 13, yRadius: 13).fill()
         drawText(caption, at: NSPoint(x: pillRect.midX, y: pillRect.midY - 0.5), size: 12, weight: .medium, color: .white)
     }

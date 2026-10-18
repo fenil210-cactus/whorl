@@ -91,7 +91,6 @@ extension CLI {
         print("ffmpeg     \(engines.ffmpeg ? "found" : "missing — adds MKV, WebM, AVI, WMV, MP3, OGG, Opus, WMA  (brew install ffmpeg)")")
         print("LibreOffice \(engines.libreOffice ? "found" : "missing — adds PPT/PPTX/XLS and sharper DOCX→PDF  (brew install --cask libreoffice)")")
         print("cwebp      \(engines.cwebp ? "found" : "missing — only needed for WebP output on older macOS  (brew install webp)")")
-        print("Accessibility (wheel anywhere): \(Permissions.accessibilityGranted ? "granted" : "not granted")")
     }
 
     static func report(_ result: JobResult) -> Int32 {

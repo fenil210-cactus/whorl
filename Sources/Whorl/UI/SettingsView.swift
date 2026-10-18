@@ -4,7 +4,6 @@ import SwiftUI
 import WhorlCore
 
 struct SettingsView: View {
-    @State private var trusted = Permissions.accessibilityGranted
     @State private var wheelOn = Prefs.wheelEnabled
     @State private var keys: [WheelMode: ModifierKey] = Dictionary(uniqueKeysWithValues: WheelMode.allCases.map { ($0, Prefs.key(for: $0)) })
     @State private var login = SMAppService.mainApp.status == .enabled
@@ -27,18 +26,7 @@ struct SettingsView: View {
                     }
                     .disabled(!wheelOn)
                 }
-                HStack {
-                    Image(systemName: trusted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(trusted ? Color.green : Color.orange)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(trusted ? "Accessibility is allowed" : "Accessibility is not allowed yet")
-                        Text(trusted ? "Whorl can see your key taps while you drag." : "Without it, the wheel can't see the key tap while another app is in front. The main window still works.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if !trusted { Button("Allow…") { Permissions.requestAccessibility() } }
-                    Button("Open Settings") { Permissions.openAccessibilitySettings() }
-                }
+                Text("No permission needed. Hold a file, tap the key, and the wheel opens.").font(.caption).foregroundStyle(.secondary)
             }
             Section("General") {
                 Toggle("Open Whorl at login", isOn: $login)
@@ -67,7 +55,6 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 520, height: 700)
         .onReceive(tick) { _ in
-            trusted = Permissions.accessibilityGranted
             engines = .current
         }
     }

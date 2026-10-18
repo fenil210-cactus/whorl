@@ -5,7 +5,7 @@
 Whorl lives in the menu bar. Use it two ways:
 
 - **The window.** Click the menu bar icon → *Open Whorl*, then drop files on it. Works with no setup and no permissions.
-- **The wheel.** Start dragging a file in Finder, tap a key, and a wheel of formats opens under your pointer. Drop on a wedge. Needs one permission (Accessibility), see below.
+- **The wheel.** Start dragging a file in Finder, tap a key, and a wheel of formats opens under your pointer. Drop on a wedge. No permissions needed.
 
 Also: right-click a file in Finder → *Services → Convert with Whorl*, *Open With → Whorl*, or drop onto the app icon.
 
@@ -32,8 +32,8 @@ Everything below works on a clean Mac with nothing else installed:
 | Kind | From → to |
 | --- | --- |
 | **Images** | JPG, PNG, WebP, HEIC, TIFF, AVIF, BMP, GIF, SVG (input) → each other, and → PDF. Photos come out upright, transparency becomes white for JPG. |
-| **PDF** | → JPG / PNG (300 dpi, every page), TXT, MD, HTML, DOCX, EPUB, RTF (text only) |
-| **Documents** | DOCX, DOC, ODT, RTF, EPUB, HTML, Markdown, TXT → PDF, DOCX, ODT, RTF, EPUB, HTML, MD, TXT. Headings, bold/italic, links and lists survive. |
+| **PDF** | → JPG / PNG (300 dpi, every page), TXT, MD, HTML, DOCX, EPUB, RTF. Headings, bold/italic, lists, tables, pictures and repeated page headers are rebuilt from the layout; scanned pages are read with on-device text recognition. |
+| **Documents** | DOCX, DOC, ODT, RTF, EPUB, HTML, Markdown, TXT → PDF, DOCX, ODT, RTF, EPUB, HTML, MD, TXT. Headings, bold/italic, links, lists, tables and pictures survive. Word files are read and written natively, not flattened. |
 | **Spreadsheets** | XLSX, ODS, CSV, TSV → each other (first sheet; quoted commas and line breaks handled) |
 | **Subtitles** | SRT ↔ VTT |
 | **Audio** | WAV, M4A, AIFF, FLAC, MP3 (in) → M4A, WAV, AIFF, FLAC |
@@ -63,7 +63,7 @@ Whorl only offers conversions that will work. Install these and more formats app
 
 Change the keys in Settings. Whorl catches the drop itself, so Finder never moves or copies your original.
 
-**Why Accessibility?** macOS only lets an app see a modifier-key tap while another app is in front if you allow it. Whorl uses it for exactly that and nothing else. Allow it from the card in the window, or System Settings → Privacy & Security → Accessibility. Because the app is signed ad hoc, macOS asks again after an update; switch Whorl off and on in that list.
+**No permissions.** Whorl reads the mouse and key state directly, so there is nothing to allow in Privacy & Security, and nothing to re-allow after an update.
 
 ## Command line
 

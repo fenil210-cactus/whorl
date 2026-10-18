@@ -7,7 +7,39 @@ enum DocConvert {
         if format == .pdf, engines.libreOffice, ["docx", "doc", "odt", "rtf"].contains(ext) {
             return try Office.convert(input: input, to: .pdf, engines: engines)
         }
+        // Word-family files keep their fonts, colours, tables and pictures when the target is also a rich format.
+        if ["doc", "odt", "rtf", "rtfd"].contains(ext), [.pdf, .docx, .odt, .rtf].contains(format),
+           let attributed = try? loadAttributed(input) {
+            return try writeRich(attributed, format: format, title: input.deletingPathExtension().lastPathComponent, beside: input)
+        }
         return try write(try load(input), format: format, beside: input)
+    }
+
+    static func loadAttributed(_ input: URL) throws -> NSAttributedString {
+        let type: NSAttributedString.DocumentType
+        switch Catalog.normalizedExtension(input.pathExtension) {
+        case "docx": type = .officeOpenXML
+        case "doc": type = .docFormat
+        case "odt": type = .openDocument
+        case "rtfd": type = .rtfd
+        default: type = .rtf
+        }
+        do {
+            return try NSAttributedString(url: input, options: [.documentType: type], documentAttributes: nil)
+        } catch {
+            throw ConvertError.unreadable(input.lastPathComponent)
+        }
+    }
+
+    static func writeRich(_ attributed: NSAttributedString, format: Format, title: String, beside input: URL) throws -> URL {
+        let output = OutputNames.url(beside: input, fileExtension: format.fileExtension)
+        switch format {
+        case .pdf: try RichText.pdf(attributed, title: title).write(to: output)
+        case .docx: try RichText.data(attributed, type: .officeOpenXML, title: title).write(to: output)
+        case .odt: try RichText.data(attributed, type: .openDocument, title: title).write(to: output)
+        default: try RichText.data(attributed, type: .rtf, title: title).write(to: output)
+        }
+        return output
     }
 
     static func load(_ input: URL) throws -> Doc {
@@ -15,19 +47,21 @@ enum DocConvert {
         let title = input.deletingPathExtension().lastPathComponent
         switch ext {
         case "md":
-            var doc = MarkdownParser.parse(try readText(input))
+            var doc = MarkdownParser.parse(try readText(input), base: input.deletingLastPathComponent())
             if doc.title.isEmpty { doc.title = title }
             return doc
         case "txt":
             return TextParser.parse(try readText(input), title: title)
         case "html":
-            var doc = HTMLParser.parse(try readText(input))
+            var doc = HTMLParser.parse(try readText(input), base: input.deletingLastPathComponent())
             if doc.title.isEmpty { doc.title = title }
             return doc
+        case "docx":
+            return try Docx.read(input, title: title)
         case "epub":
             return try Epub.read(input)
         case "pdf":
-            return TextParser.parse(PDFConvert.plainText(input), title: title)
+            return try PDFLayout.doc(from: input, title: title)
         default:
             return try loadRich(input, title: title)
         }
@@ -44,17 +78,40 @@ enum DocConvert {
     static func write(_ doc: Doc, format: Format, beside input: URL) throws -> URL {
         let output = OutputNames.url(beside: input, fileExtension: format.fileExtension)
         switch format {
-        case .md: try DocWriter.markdown(doc).write(to: output, atomically: true, encoding: .utf8)
+        case .md: try writeMarkdown(doc, to: output)
         case .txt: try DocWriter.text(doc).write(to: output, atomically: true, encoding: .utf8)
         case .html: try DocWriter.html(doc).write(to: output, atomically: true, encoding: .utf8)
         case .epub: try Epub.write(doc, to: output)
         case .pdf: try RichText.pdf(RichText.attributed(doc), title: doc.title).write(to: output)
-        case .docx: try RichText.data(RichText.attributed(doc), type: .officeOpenXML, title: doc.title).write(to: output)
+        case .docx: try Docx.write(doc, to: output)
         case .odt: try RichText.data(RichText.attributed(doc), type: .openDocument, title: doc.title).write(to: output)
         case .rtf: try RichText.data(RichText.attributed(doc), type: .rtf, title: doc.title).write(to: output)
         default: throw ConvertError.unsupported("Cannot write \(format.label) from text")
         }
         return output
+    }
+
+    /// Pictures go in a folder beside the .md file, so the markdown stays readable.
+    private static func writeMarkdown(_ doc: Doc, to output: URL) throws {
+        let images = doc.blocks.compactMap { block -> ImageData? in
+            if case .image(let image) = block.kind { return image }
+            return nil
+        }
+        var folderName = ""
+        if !images.isEmpty {
+            let stem = output.deletingPathExtension().lastPathComponent
+            folderName = "\(stem)-images"
+            let folder = output.deletingLastPathComponent().appendingPathComponent(folderName)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (index, image) in images.enumerated() {
+                try image.data.write(to: folder.appendingPathComponent("image-\(index + 1).\(image.ext)"))
+            }
+        }
+        let encodedFolder = folderName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? folderName
+        let text = DocWriter.markdown(doc) { index in
+            "\(encodedFolder)/image-\(index).\(images[index - 1].ext)"
+        }
+        try text.write(to: output, atomically: true, encoding: .utf8)
     }
 
     private static func loadRich(_ input: URL, title: String) throws -> Doc {
@@ -89,9 +146,39 @@ enum RichText {
         var sizeOfBlock: [CGFloat?] = []
         var headingSizes = Set<CGFloat>()
         var location = 0
+        var openTable: (table: NSTextTable, cells: [Int: [Int: String]])?
+
+        func closeTable() {
+            guard let open = openTable else { return }
+            openTable = nil
+            let columns = max(open.table.numberOfColumns, (open.cells.values.flatMap { $0.keys }.max() ?? -1) + 1)
+            let rows = (open.cells.keys.max() ?? -1) + 1
+            guard rows > 0, columns > 0 else { return }
+            let grid = (0..<rows).map { r in (0..<columns).map { c in open.cells[r]?[c] ?? "" } }
+            blocks.append(Block(kind: .table(TableData(rows: grid)), runs: []))
+            sizeOfBlock.append(nil)
+        }
+
         while location < whole.length {
             let range = whole.paragraphRange(for: NSRange(location: location, length: 0))
             location = NSMaxRange(range)
+            if let style = text.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle,
+               let cell = style.textBlocks.compactMap({ $0 as? NSTextTableBlock }).first {
+                if let open = openTable, open.table !== cell.table { closeTable() }
+                if openTable == nil { openTable = (cell.table, [:]) }
+                var piece = whole.substring(with: range).replacingOccurrences(of: "\u{FFFC}", with: "")
+                piece = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+                var existing = openTable?.cells[cell.startingRow]?[cell.startingColumn] ?? ""
+                if !piece.isEmpty { existing += existing.isEmpty ? piece : " " + piece }
+                openTable?.cells[cell.startingRow, default: [:]][cell.startingColumn] = existing
+                continue
+            }
+            closeTable()
+            var pictures: [ImageData] = []
+            text.enumerateAttribute(.attachment, in: range) { value, _, _ in
+                if let attachment = value as? NSTextAttachment, let picture = Self.picture(from: attachment) { pictures.append(picture) }
+            }
+            defer { for picture in pictures { blocks.append(Block(kind: .image(picture), runs: [])); sizeOfBlock.append(nil) } }
             var runs: [Run] = []
             var largest: CGFloat = 0
             text.enumerateAttributes(in: range) { attributes, subrange, _ in
@@ -115,7 +202,7 @@ enum RichText {
             if let marker = lead.first, "•◦▪‣-–".contains(marker), lead.dropFirst().first == "\t" || lead.dropFirst().first == " " {
                 kind = .bullet
                 first.text = String(lead.dropFirst().drop(while: { $0 == "\t" || $0 == " " }))
-            } else if let match = lead.range(of: "^\\d{1,3}[.)]\\s", options: .regularExpression) {
+            } else if let match = lead.range(of: "^\\d{1,3}([.)]\\s|[.)]?\\t)", options: .regularExpression) {
                 kind = .number(Int(lead[..<match.upperBound].filter(\.isNumber)) ?? 1)
                 first.text = String(lead[match.upperBound...])
             }
@@ -133,6 +220,7 @@ enum RichText {
             sizeOfBlock.append(short && ratio >= 1.12 ? (largest * 2).rounded() / 2 : nil)
         }
         // Heading levels come from rank, not fixed sizes: the biggest size is H1, the next H2, and so on.
+        closeTable()
         let ranked = headingSizes.sorted(by: >)
         for index in blocks.indices {
             guard let size = sizeOfBlock[index], let rank = ranked.firstIndex(of: size) else { continue }
@@ -141,6 +229,15 @@ enum RichText {
         }
         let heading = MarkdownParser.firstHeading(blocks)
         return Doc(title: heading.isEmpty ? title : heading, blocks: blocks)
+    }
+
+    static func picture(from attachment: NSTextAttachment) -> ImageData? {
+        let image = attachment.image
+            ?? attachment.fileWrapper?.regularFileContents.flatMap { NSImage(data: $0) }
+        guard let image, image.size.width > 1, let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) else { return nil }
+        let size = attachment.bounds.size.width > 1 ? attachment.bounds.size : image.size
+        return ImageData(data: png, width: size.width, height: size.height, ext: "png")
     }
 
     static func attributed(_ doc: Doc) -> NSAttributedString {
@@ -156,6 +253,14 @@ enum RichText {
             return NSFont(descriptor: descriptor, size: run.code ? mono.pointSize : size) ?? family
         }
         for block in doc.blocks {
+            if case .table(let data) = block.kind {
+                result.append(Self.tableText(data, base: base))
+                continue
+            }
+            if case .image(let image) = block.kind {
+                result.append(Self.pictureText(image, base: base))
+                continue
+            }
             var size: CGFloat = 11
             var bold = false
             let style = NSMutableParagraphStyle()
@@ -185,7 +290,7 @@ enum RichText {
             case .code:
                 style.firstLineHeadIndent = 8
                 style.headIndent = 8
-            case .paragraph:
+            case .paragraph, .table, .image:
                 break
             }
             if !prefix.isEmpty {
@@ -203,6 +308,51 @@ enum RichText {
             }
             result.append(NSAttributedString(string: "\n", attributes: [.font: font(Run(text: ""), size: size, bold: false), .paragraphStyle: style]))
         }
+        return result
+    }
+
+    /// Widest a picture may be on a page with the default margins (A4 / Letter).
+    static let contentWidth: CGFloat = 467
+
+    static func pictureText(_ image: ImageData, base: NSFont) -> NSAttributedString {
+        let attachment = NSTextAttachment(data: image.data, ofType: image.ext == "jpg" ? "public.jpeg" : "public.png")
+        let scale = min(1, contentWidth / max(CGFloat(image.width), 1))
+        attachment.bounds = CGRect(x: 0, y: 0, width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
+        let style = NSMutableParagraphStyle()
+        style.paragraphSpacing = 10
+        style.paragraphSpacingBefore = 4
+        let result = NSMutableAttributedString(attachment: attachment)
+        result.append(NSAttributedString(string: "\n"))
+        result.addAttributes([.paragraphStyle: style, .font: base], range: NSRange(location: 0, length: result.length))
+        return result
+    }
+
+    static func tableText(_ data: TableData, base: NSFont) -> NSAttributedString {
+        let result = NSMutableAttributedString()
+        let columns = max(data.columns, 1)
+        let table = NSTextTable()
+        table.numberOfColumns = columns
+        table.layoutAlgorithm = .automaticLayoutAlgorithm
+        table.collapsesBorders = true
+        table.setContentWidth(100, type: .percentageValueType)
+        for (r, row) in data.rows.enumerated() {
+            for c in 0..<columns {
+                let cell = NSTextTableBlock(table: table, startingRow: r, rowSpan: 1, startingColumn: c, columnSpan: 1)
+                cell.setWidth(0.6, type: .absoluteValueType, for: .border)
+                cell.setBorderColor(NSColor(white: 0.62, alpha: 1))
+                cell.setWidth(5, type: .absoluteValueType, for: .padding)
+                let header = r == 0 && data.header
+                if header { cell.backgroundColor = NSColor(white: 0.92, alpha: 1) }
+                let style = NSMutableParagraphStyle()
+                style.textBlocks = [cell]
+                let text = c < row.count ? row[c] : ""
+                let font = header ? (NSFont(descriptor: base.fontDescriptor.withSymbolicTraits(.bold), size: 11) ?? base) : base
+                result.append(NSAttributedString(string: text + "\n", attributes: [.font: font, .paragraphStyle: style]))
+            }
+        }
+        let spacer = NSMutableParagraphStyle()
+        spacer.paragraphSpacing = 8
+        result.append(NSAttributedString(string: "\n", attributes: [.font: base, .paragraphStyle: spacer]))
         return result
     }
 
@@ -299,8 +449,24 @@ enum Epub {
         let head = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" lang=\"en\">\n"
         try (head + "<head><title>\(title)</title></head>\n<body>\n<nav epub:type=\"toc\"><ol><li><a href=\"chapter.xhtml\">\(title)</a></li></ol></nav>\n</body>\n</html>\n")
             .write(to: root.appendingPathComponent("OEBPS/nav.xhtml"), atomically: true, encoding: .utf8)
-        try (head + "<head><title>\(title)</title></head>\n<body>\n\(DocWriter.htmlBody(doc))</body>\n</html>\n")
+        var pictures: [(name: String, image: ImageData)] = []
+        let body = DocWriter.htmlBody(doc) { index, image in
+            let name = "image-\(index).\(image.ext)"
+            pictures.append((name, image))
+            return "images/\(name)"
+        }
+        try (head + "<head><title>\(title)</title></head>\n<body>\n\(body)</body>\n</html>\n")
             .write(to: root.appendingPathComponent("OEBPS/chapter.xhtml"), atomically: true, encoding: .utf8)
+        if !pictures.isEmpty {
+            let folder = root.appendingPathComponent("OEBPS/images")
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            for item in pictures { try item.image.data.write(to: folder.appendingPathComponent(item.name)) }
+            let manifest = pictures.enumerated().map { "    <item id=\"img\($0.offset + 1)\" href=\"images/\($0.element.name)\" media-type=\"\($0.element.image.mime)\"/>" }.joined(separator: "\n")
+            let opfURL = root.appendingPathComponent("OEBPS/content.opf")
+            let opf = try String(contentsOf: opfURL, encoding: .utf8)
+                .replacingOccurrences(of: "  </manifest>", with: manifest + "\n  </manifest>")
+            try opf.write(to: opfURL, atomically: true, encoding: .utf8)
+        }
         try Shell.zip(directory: root, to: output, first: ["mimetype"])
     }
 

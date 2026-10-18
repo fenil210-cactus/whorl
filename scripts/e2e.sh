@@ -38,13 +38,18 @@ contains() { # <file> <text> <label>
   if grep -q -- "$2" "$1" 2>/dev/null; then ok "$3"; else bad "$3" "'$2' not found in $1"; fi
 }
 
+# convo <input> <format> <want>: run only when this Mac offers the route (HEIC/AVIF encoders depend on the OS or VM)
+convo() {
+  if "$WHORL" formats "$1" | sed -n 1p | tr ' ' '\n' | grep -qx "$2"; then conv "$1" "$2" "$3"; else ok "$1 -> $2 not offered on this Mac (skipped, correctly)"; fi
+}
+
 echo "== images =="
 conv photo.png jpg "JPEG"
-conv photo.png heic "ISO Media"
+convo photo.png heic "ISO Media"
 conv photo.png tiff "TIFF"
 conv photo.png bmp "PC bitmap"
 conv photo.png gif "GIF"
-conv photo.png avif "ISO Media"
+convo photo.png avif "ISO Media"
 conv photo.png webp "Web/P"
 conv photo.png pdf "PDF"
 conv photo.heic png "PNG"

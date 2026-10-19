@@ -1,5 +1,8 @@
 # Whorl
 
+https://github.com/user-attachments/assets/e2f22946-924d-4ca3-aca9-56f9d6203ff2
+
+
 **Free, offline file converter for your Mac.** Drop a file, pick a format, done. The new file lands next to the original. Nothing is uploaded, nothing is metered, no account.
 
 Whorl lives in the menu bar. Use it two ways:
